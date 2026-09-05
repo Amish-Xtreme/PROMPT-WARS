@@ -1,0 +1,111 @@
+import React, { useState } from 'react';
+import { 
+  AlertTriangle, CheckCircle, FileText, User, 
+  ArrowUpRight, ArrowDownRight, ShieldCheck, Edit3 
+} from 'lucide-react';
+
+// Mock Patient Record matching backend Pydantic schema
+const mockRecord = {
+  patient_id: "PAT-892301",
+  demographics: { age: 45, sex: "Female", source: "USER_INPUT" },
+  clinical_intake: {
+    symptoms: [{ name: "Fatigue", duration: "3 weeks", source: "USER_INPUT" }],
+    allergies: [{ substance: "Penicillin", reaction: "Hives", source: "USER_INPUT" }],
+    medications: [{ name: "Levothyroxine", dosage: "50 mcg daily", source: "USER_INPUT" }]
+  },
+  laboratory_results: [
+    {
+      test_id: "LAB-101",
+      test_name: "Thyroid Stimulating Hormone (TSH)",
+      value: "6.2",
+      unit: "uIU/mL",
+      reference_range: { provided: true, raw_text: "0.4 - 4.0 uIU/mL" },
+      status: "HIGH",
+      confidence: 0.98,
+      source: "PDF_EXTRACTION"
+    },
+    {
+      test_id: "LAB-102",
+      test_name: "Hemoglobin",
+      value: "13.5",
+      unit: "g/dL",
+      reference_range: { provided: true, raw_text: "12.0 - 15.5 g/dL" },
+      status: "NORMAL",
+      confidence: 0.99,
+      source: "PDF_EXTRACTION"
+    }
+  ],
+  patient_summary: {
+    text: "The patient is a 45-year-old female presenting with 3 weeks of fatigue. Current lab reports show elevated TSH (6.2 uIU/mL). Hemoglobin remains within normal limits. No new diagnoses or treatment modifications are provided."
+  }
+};
+
+export default function MedLensDashboard() {
+  const [data, setData] = useState(mockRecord);
+  const [selectedLab, setSelectedLab] = useState(null);
+
+  return (
+    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans">
+      
+      {/* LEFT PANEL: Structured Patient Record */}
+      <div className="w-1/2 flex flex-col border-r border-slate-200 overflow-y-auto p-6 space-y-6">
+        
+        {/* Header */}
+        <div className="flex items-center justify-between pb-4 border-b border-slate-200">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">MedLens</h1>
+            <p className="text-xs text-slate-500">Patient ID: {data.patient_id}</p>
+          </div>
+          <span className="flex items-center gap-1 text-xs font-semibold bg-blue-50 text-blue-700 px-3 py-1 rounded-full border border-blue-200">
+            <ShieldCheck className="w-4 h-4" /> AI Guardrails Active
+          </span>
+        </div>
+
+        {/* Clinical Intake Section */}
+        <section className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+              <User className="w-4 h-4 text-slate-500" /> Patient Onboarding Data
+            </h2>
+            <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">User-Provided</span>
+          </div>
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <p className="text-xs text-slate-400">Demographics</p>
+              <p className="font-medium">{data.demographics.age} Y / {data.demographics.sex}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400">Medications</p>
+              <p className="font-medium">{data.clinical_intake.medications[0].name} ({data.clinical_intake.medications[0].dosage})</p>
+            </div>
+          </div>
+        </section>
+
+        {/* Structured Lab Results */}
+        <section className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+              <FileText className="w-4 h-4 text-slate-500" /> Laboratory Extracted Data
+            </h2>
+            <span className="text-xs bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 rounded">
+              AI Extracted
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {data.laboratory_results.map((lab) => (
+              <div 
+                key={lab.test_id}
+                onClick={() => setSelectedLab(lab)}
+                className={`p-3 rounded-lg border transition-all cursor-pointer flex items-center justify-between ${
+                  selectedLab?.test_id === lab.test_id ? 'border-blue-500 bg-blue-50/30' : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold text-sm text-slate-800">{lab.test_name}</p>
+                    <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">
+                      {Math.round(lab.confidence * 100)}% conf
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500">Ref Range: {lab.reference_
