@@ -1,0 +1,181 @@
+import os
+from typing import List, Optional, Literal
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+app = FastAPI(
+    title="MedLens Clinical Intelligence API",
+    description="Backend service for processing patient intake, parsing lab reports, and flagging conflicts."
+)
+
+# Enable CORS for frontend integration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- DATA MODELS ---
+
+class ReferenceRange(BaseModel):
+    provided: bool = Field(..., description="True if range exists in source report")
+    raw_text: Optional[str] = None
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+
+class Provenance(BaseModel):
+    source_id: str
+    source_type: Literal["USER_INPUT", "PDF_EXTRACTION"]
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+class LabResult(BaseModel):
+    test_id: str
+    test_name: str
+    value: str
+    numeric_value: Optional[float] = None
+    unit: str
+    reference_range: ReferenceRange
+    status: Literal["LOW", "NORMAL", "HIGH", "UNKNOWN"]
+    provenance: Provenance
+
+class Symptom(BaseModel):
+    name: str
+    duration: Optional[str] = None
+
+class Medication(BaseModel):
+    name: str
+    dosage: str
+
+class ClinicalIntake(BaseModel):
+    symptoms: List[Symptom] = []
+    known_conditions: List[str] = []
+    medications: List[Medication] = []
+
+class ConflictFlag(BaseModel):
+    conflict_id: str
+    severity: Literal["LOW", "MEDIUM", "HIGH"]
+    description: str
+
+class PatientSummary(BaseModel):
+    text: str
+    disclaimer: str = (
+        "This summary is generated automatically for organizational purposes and "
+        "does not constitute medical advice or diagnosis."
+    )
+
+class PatientRecordResponse(BaseModel):
+    patient_id: str
+    demographics: dict
+    clinical_intake: ClinicalIntake
+    laboratory_results: List[LabResult]
+    system_flagged_conflicts: List[ConflictFlag]
+    patient_summary: PatientSummary
+
+# --- HELPER LOGIC ---
+
+def compute_lab_status(value: Optional[float], ref_range: ReferenceRange) -> str:
+    """Evaluates status strictly using reported ranges to prevent AI hallucination."""
+    if value is None or not ref_range.provided:
+        return "UNKNOWN"
+    if ref_range.min_value is not None and value < ref_range.min_value:
+        return "LOW"
+    if ref_range.max_value is not None and value > ref_range.max_value:
+        return "HIGH"
+    if ref_range.min_value is not None and ref_range.max_value is not None:
+        if ref_range.min_value <= value <= ref_range.max_value:
+            return "NORMAL"
+    return "UNKNOWN"
+
+# --- API ENDPOINTS ---
+
+@app.get("/")
+def root():
+    return {"status": "online", "system": "MedLens Core API"}
+
+@app.post("/api/v1/process-record", response_model=PatientRecordResponse)
+async def process_patient_record(
+    patient_id: str = Form("PAT-892301"),
+    age: int = Form(45),
+    sex: str = Form("Female"),
+    symptoms: str = Form("Fatigue"),
+    conditions: str = Form("Hypothyroidism"),
+    medications: str = Form("Levothyroxine 50mcg daily"),
+    file: Optional[UploadFile] = File(None)
+):
+    source_user = Provenance(source_id="SRC-USER", source_type="USER_INPUT")
+    source_pdf = Provenance(source_id="SRC-PDF", source_type="PDF_EXTRACTION", confidence=0.98)
+
+    intake = ClinicalIntake(
+        symptoms=[Symptom(name=symptoms, duration="3 weeks")],
+        known_conditions=[c.strip() for c in conditions.split(",")],
+        medications=[Medication(name="Levothyroxine", dosage="50 mcg daily")]
+    )
+
+    # Simulated OCR/Extraction from source report
+    mock_raw_labs = [
+        {
+            "id": "LAB-101",
+            "name": "Thyroid Stimulating Hormone (TSH)",
+            "value_str": "6.2",
+            "value_num": 6.2,
+            "unit": "uIU/mL",
+            "ref": ReferenceRange(provided=True, raw_text="0.4 - 4.0 uIU/mL", min_value=0.4, max_value=4.0)
+        },
+        {
+            "id": "LAB-102",
+            "name": "Hemoglobin",
+            "value_str": "13.5",
+            "value_num": 13.5,
+            "unit": "g/dL",
+            "ref": ReferenceRange(provided=True, raw_text="12.0 - 15.5 g/dL", min_value=12.0, max_value=15.5)
+        }
+    ]
+
+    labs = []
+    for raw in mock_raw_labs:
+        status = compute_lab_status(raw["value_num"], raw["ref"])
+        labs.append(
+            LabResult(
+                test_id=raw["id"],
+                test_name=raw["name"],
+                value=raw["value_str"],
+                numeric_value=raw["value_num"],
+                unit=raw["unit"],
+                reference_range=raw["ref"],
+                status=status,
+                provenance=source_pdf
+            )
+        )
+
+    # Conflict detection logic
+    conflicts = []
+    if any(l.test_name.startswith("Thyroid") and l.status == "HIGH" for l in labs):
+        conflicts.append(
+            ConflictFlag(
+                conflict_id="CONF-001",
+                severity="MEDIUM",
+                description="Elevated TSH detected relative to source reference ranges. Review with clinician recommended."
+            )
+        )
+
+    summary_text = (
+        f"Patient is a {age}-year-old {sex} presenting with {symptoms}. "
+        f"Reported medications: {medications}. "
+        f"Extracted laboratory data indicates an elevated TSH (6.2 uIU/mL) outside report boundaries, while Hemoglobin is normal."
+    )
+
+    return PatientRecordResponse(
+        patient_id=patient_id,
+        demographics={"age": age, "sex": sex},
+        clinical_intake=intake,
+        laboratory_results=labs,
+        system_flagged_conflicts=conflicts,
+        patient_summary=PatientSummary(text=summary_text)
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
